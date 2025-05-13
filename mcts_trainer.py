@@ -224,7 +224,13 @@ class Trainer:
             print(f"Epoka {epoch + 1}/{epochs}...")
             for _ in range(0, len(self.memory), batch_size):
                 batch = random.sample(self.memory, min(len(self.memory), batch_size))
-                states = torch.tensor(np.array([b[0] for b in batch]), device=self.device).float()
+                # reshape back into (batch, H, W) for your CNN
+                raw_states = np.array([b[0] for b in batch], dtype=np.float32)     # shape (batch, 225)
+                states = (
+                    torch.tensor(raw_states, device=self.device)
+                         .view(-1, self.env.board_size, self.env.board_size)
+                         .float()
+                )
                 pis = torch.tensor([b[1] for b in batch], device=self.device)
                 vs = torch.tensor([b[2] for b in batch], device=self.device).float()
 
@@ -309,20 +315,26 @@ class Trainer:
         for it in range(1, iterations+1):
             print(f"Rozpoczynam iterację {it}...")
             self.self_play(games=self_play_games)
-            print(f"Self-play zakończone. Liczba przykładów w pamięci: {len(self.memory)}")
             avg_loss, avg_q = self.update_network()
             print(f"Aktualizacja sieci zakończona. avg_loss={avg_loss:.4f}, avg_q={avg_q:.4f}")
-            eval_res = self.evaluate_against_previous(games=eval_games, previous_model_path=model_path)
-            print(f"Ewaluacja zakończona. Wyniki: {eval_res}")
-            win_rate = eval_res['win'] / eval_games
-            print(f"Współczynnik wygranych: {win_rate:.2%}")
-            if win_rate > best_win_rate:
-                best_win_rate = win_rate
+
+            # tylko jeśli istnieje poprzedni model
+            if os.path.exists(model_path):
+                eval_res = self.evaluate_against_previous(games=eval_games, previous_model_path=model_path)
+            else:
+                print("Brak wcześniejszego modelu – pomijam ewaluację przeciwko poprzedniej wersji.")
+                # ewentualnie można od razu zapisać nowy model jako bazowy
+                eval_res = {'win': 0, 'loss': 0, 'draw': 0}
+
+            win_rate = eval_res['win'] / eval_games if eval_games else 0
+            if not os.path.exists(model_path) or win_rate > best_win_rate:
                 torch.save(self.net.state_dict(), model_path)
+                best_win_rate = win_rate
                 print(f"Nowy model zapisany jako {model_path} (lepszy wynik).")
             else:
                 print("Nowy model nie jest lepszy. Poprzedni model pozostaje bez zmian.")
-            print(f"Zapisuję statystyki do pliku {self.stats_file}...")
+            
+            # zapisz statystyki...
             with open(self.stats_file, 'a', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([it, self_play_games, eval_games, len(self.memory),
